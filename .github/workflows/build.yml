@@ -1,0 +1,71 @@
+# Put this file in your PUBLIC admin repo at:  .github/workflows/build.yml
+# The repo root needs only this workflow and the zip fixeaze_admin_public.zip
+# One-time setting:  Settings > Pages > Source: choose "GitHub Actions"
+# Your admin link will be:  https://YOUR-GITHUB-NAME.github.io/REPO-NAME/
+name: Build and publish Fixeaze Admin
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip the app
+        run: |
+          COUNT=$(ls *.zip 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then echo "ERROR: no .zip file found in the repo root."; exit 1; fi
+          for z in *.zip; do echo "Unzipping $z"; unzip -q -o "$z"; done
+          if [ ! -d fixeaze_app ]; then echo "ERROR: the zip did not contain a folder called fixeaze_app"; ls -la; exit 1; fi
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Set up web part
+        working-directory: fixeaze_app
+        run: flutter create . --platforms web
+
+      - name: Apply Fixeaze logo and make it the Admin site
+        working-directory: fixeaze_app
+        run: |
+          cp -rf web_overrides/. web/
+          sed -i 's/"Fixeaze"/"Fixeaze Admin"/g' web/manifest.json
+          sed -i 's|<title>[^<]*</title>|<title>Fixeaze Admin</title>|' web/index.html
+          printf 'User-agent: *\nDisallow: /\n' > web/robots.txt
+          rm -f web/sitemap.xml
+
+      - name: Get packages
+        working-directory: fixeaze_app
+        run: flutter pub get
+
+      - name: Build the admin dashboard
+        working-directory: fixeaze_app
+        run: flutter build web --release -t lib/main_admin.dart --base-href "/${{ github.event.repository.name }}/"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: fixeaze_app/build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
